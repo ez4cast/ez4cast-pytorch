@@ -110,7 +110,7 @@ class PTSEstimator(Estimator):
         """
         pass
 
-    def train_model(self, training_data: Dataset) -> TrainOutput:
+    def train_model(self, training_data: Dataset, input_net=None) -> TrainOutput:
         transformation = self.create_transformation()
         transformation.estimate(iter(training_data))
 
@@ -128,8 +128,11 @@ class PTSEstimator(Estimator):
         )
 
         # ensure that the training network is created on the same device
-        trained_net = self.create_training_network(self.trainer.device)
-
+        if input_net is None:
+            trained_net = self.create_training_network(self.trainer.device)
+        else:
+            print('Load network from input')
+            trained_net = input_net
         self.trainer(
             net=trained_net,
             input_names=get_module_forward_input_names(trained_net),
