@@ -1,6 +1,6 @@
 # PyTorchTS
 
-PyTorchTS is a [PyTorch](https://github.com/pytorch/pytorch) Probabilistic Time Series forecasting framework which provides state of the art PyTorch time series models by utilizing [GluonTS](https://github.com/awslabs/gluon-ts) as its API (with minimal changes) and for loading, transforming and back-testing time series data sets. Currently the GluonTS code is copied into this repository with changes for PyTorch but eventually GluonTS should become an external requirement.
+PyTorchTS is a [PyTorch](https://github.com/pytorch/pytorch) Probabilistic Time Series forecasting framework which provides state of the art PyTorch time series models by utilizing [GluonTS](https://github.com/awslabs/gluon-ts) as its back-end API and for loading, transforming and back-testing time series data sets.
 
 ## Installation
 
@@ -17,10 +17,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 
-from pts.dataset import ListDataset
+from gluonts.dataset.common import ListDataset
+from gluonts.dataset.util import to_pandas
+
 from pts.model.deepar import DeepAREstimator
 from pts import Trainer
-from pts.dataset import to_pandas
 ```
 
 This simple example illustrates how to train a model on some data, and then use it to make predictions. As a first step, we need to collect some data: in this example we will use the volume of tweets mentioning the AMZN ticker symbol.
@@ -38,7 +39,7 @@ plt.grid(which='both')
 plt.show()
 ```
 
-![png](https://github.com/zalandoresearch/pytorch-ts/blob/master/examples/images/readme_0.png)
+![png](https://github.com/zalandoresearch/pytorch-ts/blob/master/examples/images/readme_0.png?raw=true)
 
 
 We can now prepare a training dataset for our model to train on. Datasets are essentially iterable collections of dictionaries: each dictionary represents a time series with possibly associated features. For this example, we only have one entry, specified by the `"start"` field which is the timestamp of the first data point, and the `"target"` field containing time series data. For training, we will use data up to midnight on April 5th, 2015.
@@ -62,7 +63,7 @@ estimator = DeepAREstimator(freq="5min",
                             input_size=43,
                             trainer=Trainer(epochs=10,
                                             device=device))
-predictor = estimator.train(training_data=training_data)
+predictor = estimator.train(training_data=training_data, num_workers=4)
 ```
 ```
     45it [00:01, 37.60it/s, avg_epoch_loss=4.64, epoch=0]
@@ -97,7 +98,7 @@ for test_entry, forecast in zip(test_data, predictor.predict(test_data)):
 plt.grid(which='both')
 ```
 
-![png](https://github.com/zalandoresearch/pytorch-ts/blob/master/examples/images/readme_1.png)
+![png](https://github.com/zalandoresearch/pytorch-ts/blob/master/examples/images/readme_1.png?raw=true)
 
 
 Note that the forecast is displayed in terms of a probability distribution: the shaded areas represent the 50% and 90% prediction intervals, respectively, centered around the median (dark green line).
@@ -110,17 +111,62 @@ pip install -e .
 pytest test
 ```
 
+## Citing
+
+To cite this repository:
+
+```tex
+@software{pytorchgithub,
+    author = {Kashif Rasul},
+    title = {{P}yTorch{TS}},
+    url = {https://github.com/zalandoresearch/pytorch-ts},
+    version = {0.5.x},
+    year = {2021},
+}
+```
+
 ## Scientific Article
 
 We have implemented the following model using this framework:
 
 * [Multi-variate Probabilistic Time Series Forecasting via Conditioned Normalizing Flows](https://arxiv.org/abs/2002.06103)
 ```tex
-@article{rasul2020tempflow,
-    Author = {Kashif Rasul, Abdul-Saboor Sheikh, Ingmar Schuster, Urs Bergmann, Roland Vollgraf}
-    Title = {Multi-variate Probabilistic Time Series Forecasting via Conditioned Normalizing Flows},
-    Year = {2020},
-    archivePrefix = {arXiv},
-    eprint = {2002.06103},
+@INPROCEEDINGS{rasul2020tempflow,
+  author = {Kashif Rasul and  Abdul-Saboor Sheikh and  Ingmar Schuster and Urs Bergmann and Roland Vollgraf},
+  title = {{M}ultivariate {P}robabilistic {T}ime {S}eries {F}orecasting via {C}onditioned {N}ormalizing {F}lows},
+  year = {2021},
+  url = {https://openreview.net/forum?id=WiGQBFuVRv},
+  booktitle = {International Conference on Learning Representations 2021},
+}
+```
+
+* [Autoregressive Denoising Diffusion Models for Multivariate Probabilistic Time Series Forecasting
+](http://proceedings.mlr.press/v139/rasul21a.html)
+```tex
+@InProceedings{pmlr-v139-rasul21a,
+  title = 	 {{A}utoregressive {D}enoising {D}iffusion {M}odels for {M}ultivariate {P}robabilistic {T}ime {S}eries {F}orecasting},
+  author =       {Rasul, Kashif and Seward, Calvin and Schuster, Ingmar and Vollgraf, Roland},
+  booktitle = 	 {Proceedings of the 38th International Conference on Machine Learning},
+  pages = 	 {8857--8868},
+  year = 	 {2021},
+  editor = 	 {Meila, Marina and Zhang, Tong},
+  volume = 	 {139},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {18--24 Jul},
+  publisher =    {PMLR},
+  pdf = 	 {http://proceedings.mlr.press/v139/rasul21a/rasul21a.pdf},
+  url = 	 {http://proceedings.mlr.press/v139/rasul21a.html},
+}
+```
+
+* [Probabilistic Time Series Forecasting with Implicit Quantile Networks](https://arxiv.org/abs/2107.03743)
+```tex
+@misc{gouttes2021probabilistic,
+      title={{P}robabilistic {T}ime {S}eries {F}orecasting with {I}mplicit {Q}uantile {N}etworks}, 
+      author={Adèle Gouttes and Kashif Rasul and Mateusz Koren and Johannes Stephan and Tofigh Naghibi},
+      year={2021},
+      eprint={2107.03743},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
 }
 ```

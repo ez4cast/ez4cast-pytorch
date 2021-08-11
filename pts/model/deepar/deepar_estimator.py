@@ -4,16 +4,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from pts import Trainer
-from pts.dataset import FieldName
-from pts.feature import (
+from gluonts.core.component import validated
+from gluonts.dataset.field_names import FieldName
+from gluonts.time_feature import (
     TimeFeature,
     get_lags_for_frequency,
     time_features_from_frequency_str,
 )
-from pts.model import PTSEstimator, Predictor, PTSPredictor, copy_parameters
-from pts.modules import DistributionOutput, StudentTOutput
-from pts.transform import (
+from gluonts.transform import (
     Transformation,
     Chain,
     RemoveFields,
@@ -24,12 +22,25 @@ from pts.transform import (
     AddAgeFeature,
     VstackFeatures,
     InstanceSplitter,
+    ValidationSplitSampler,
+    TestSplitSampler,
     ExpectedNumInstanceSampler,
 )
+from gluonts.torch.util import copy_parameters
+from gluonts.torch.model.predictor import PyTorchPredictor
+from gluonts.torch.modules.distribution_output import DistributionOutput
+from gluonts.model.predictor import Predictor
+
+from pts.model.utils import get_module_forward_input_names
+from pts import Trainer
+from pts.model import PyTorchEstimator
+from pts.modules import StudentTOutput
+
 from .deepar_network import DeepARTrainingNetwork, DeepARPredictionNetwork
 
 
-class DeepAREstimator(PTSEstimator):
+class DeepAREstimator(PyTorchEstimator):
+    @validated()
     def __init__(
         self,
         freq: str,
@@ -80,7 +91,9 @@ class DeepAREstimator(PTSEstimator):
         )
         self.scaling = scaling
         self.lags_seq = (
-            lags_seq if lags_seq is not None else get_lags_for_frequency(freq_str=freq)
+            lags_seq
+            if lags_seq is not None
+            else get_lags_for_frequency(freq_str=freq, lag_ub=self.context_length)
         )
         self.time_features = (
             time_features
@@ -91,6 +104,11 @@ class DeepAREstimator(PTSEstimator):
         self.history_length = self.context_length + max(self.lags_seq)
 
         self.num_parallel_samples = num_parallel_samples
+
+        self.train_sampler = ExpectedNumInstanceSampler(
+            num_instances=1.0, min_future=prediction_length
+        )
+        self.validation_sampler = ValidationSplitSampler(min_future=prediction_length)
 
     def create_transformation(self) -> Transformation:
         remove_field_names = []
@@ -115,10 +133,14 @@ class DeepAREstimator(PTSEstimator):
             )
             + [
                 AsNumpyArray(
-                    field=FieldName.FEAT_STATIC_CAT, expected_ndim=1, dtype=np.long,
+                    field=FieldName.FEAT_STATIC_CAT,
+                    expected_ndim=1,
+                    dtype=np.long,
                 ),
                 AsNumpyArray(
-                    field=FieldName.FEAT_STATIC_REAL, expected_ndim=1, dtype=self.dtype,
+                    field=FieldName.FEAT_STATIC_REAL,
+                    expected_ndim=1,
+                    dtype=self.dtype,
                 ),
                 AsNumpyArray(
                     field=FieldName.TARGET,
@@ -159,20 +181,30 @@ class DeepAREstimator(PTSEstimator):
                         else []
                     ),
                 ),
-                InstanceSplitter(
-                    target_field=FieldName.TARGET,
-                    is_pad_field=FieldName.IS_PAD,
-                    start_field=FieldName.START,
-                    forecast_start_field=FieldName.FORECAST_START,
-                    train_sampler=ExpectedNumInstanceSampler(num_instances=1),
-                    past_length=self.history_length,
-                    future_length=self.prediction_length,
-                    time_series_fields=[
-                        FieldName.FEAT_TIME,
-                        FieldName.OBSERVED_VALUES,
-                    ],
-                ),
             ]
+        )
+
+    def create_instance_splitter(self, mode: str):
+        assert mode in ["training", "validation", "test"]
+
+        instance_sampler = {
+            "training": self.train_sampler,
+            "validation": self.validation_sampler,
+            "test": TestSplitSampler(),
+        }[mode]
+
+        return InstanceSplitter(
+            target_field=FieldName.TARGET,
+            is_pad_field=FieldName.IS_PAD,
+            start_field=FieldName.START,
+            forecast_start_field=FieldName.FORECAST_START,
+            instance_sampler=instance_sampler,
+            past_length=self.history_length,
+            future_length=self.prediction_length,
+            time_series_fields=[
+                FieldName.FEAT_TIME,
+                FieldName.OBSERVED_VALUES,
+            ],
         )
 
     def create_training_network(self, device: torch.device) -> DeepARTrainingNetwork:
@@ -218,13 +250,15 @@ class DeepAREstimator(PTSEstimator):
         ).to(device)
 
         copy_parameters(trained_network, prediction_network)
+        input_names = get_module_forward_input_names(prediction_network)
+        prediction_splitter = self.create_instance_splitter("test")
 
-        return PTSPredictor(
-            input_transform=transformation,
+        return PyTorchPredictor(
+            input_transform=transformation + prediction_splitter,
+            input_names=input_names,
             prediction_net=prediction_network,
             batch_size=self.trainer.batch_size,
             freq=self.freq,
             prediction_length=self.prediction_length,
             device=device,
-            dtype=self.dtype,
         )
