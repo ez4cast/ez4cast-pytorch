@@ -128,11 +128,7 @@ class PTSEstimator(Estimator):
         )
 
         # ensure that the training network is created on the same device
-        if input_net is None:
-            trained_net = self.create_training_network(self.trainer.device)
-        else:
-            print('Load network from input')
-            trained_net = input_net
+        trained_net = self.create_training_network(self.trainer.device)
         self.trainer(
             net=trained_net,
             input_names=get_module_forward_input_names(trained_net),
