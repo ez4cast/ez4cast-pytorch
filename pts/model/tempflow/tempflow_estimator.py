@@ -2,18 +2,19 @@ from typing import List, Optional
 
 import torch
 
-from pts import Trainer
-from pts.dataset import FieldName
-from pts.feature import (
-    TimeFeature,
-    fourier_time_features_from_frequency_str,
-    get_fourier_lags_for_frequency,
-)
-from pts.model import PTSEstimator, PTSPredictor, copy_parameters
-from pts.transform import (
+from gluonts.core.component import validated
+from gluonts.dataset.field_names import FieldName
+from gluonts.time_feature import TimeFeature
+from gluonts.torch.model.predictor import PyTorchPredictor
+from gluonts.torch.util import copy_parameters
+from gluonts.model.predictor import Predictor
+from gluonts.torch.model.predictor import PyTorchPredictor
+from gluonts.transform import (
     Transformation,
     Chain,
     InstanceSplitter,
+    ValidationSplitSampler,
+    TestSplitSampler,
     ExpectedNumInstanceSampler,
     RenameFields,
     AsNumpyArray,
@@ -24,10 +25,20 @@ from pts.transform import (
     SetFieldIfNotPresent,
     TargetDimIndicator,
 )
+
+from pts import Trainer
+from pts.feature import (
+    fourier_time_features_from_frequency,
+    lags_for_fourier_time_features_from_frequency,
+)
+from pts.model.utils import get_module_forward_input_names
+from pts.model import PyTorchEstimator
+
 from .tempflow_network import TempFlowTrainingNetwork, TempFlowPredictionNetwork
 
 
-class TempFlowEstimator(PTSEstimator):
+class TempFlowEstimator(PyTorchEstimator):
+    @validated()
     def __init__(
         self,
         input_size: int,
@@ -49,7 +60,6 @@ class TempFlowEstimator(PTSEstimator):
         n_hidden=2,
         conditioning_length: int = 200,
         dequantize: bool = False,
-
         scaling: bool = True,
         pick_incomplete: bool = False,
         lags_seq: Optional[List[int]] = None,
@@ -84,26 +94,43 @@ class TempFlowEstimator(PTSEstimator):
         self.lags_seq = (
             lags_seq
             if lags_seq is not None
-            else get_fourier_lags_for_frequency(freq_str=freq)
+            else lags_for_fourier_time_features_from_frequency(freq_str=freq)
         )
 
         self.time_features = (
             time_features
             if time_features is not None
-            else fourier_time_features_from_frequency_str(self.freq)
+            else fourier_time_features_from_frequency(self.freq)
         )
 
         self.history_length = self.context_length + max(self.lags_seq)
         self.pick_incomplete = pick_incomplete
         self.scaling = scaling
 
+        self.train_sampler = ExpectedNumInstanceSampler(
+            num_instances=1.0,
+            min_past=0 if pick_incomplete else self.history_length,
+            min_future=prediction_length,
+        )
+
+        self.validation_sampler = ValidationSplitSampler(
+            min_past=0 if pick_incomplete else self.history_length,
+            min_future=prediction_length,
+        )
+
     def create_transformation(self) -> Transformation:
         return Chain(
             [
-                AsNumpyArray(field=FieldName.TARGET, expected_ndim=2,),
+                AsNumpyArray(
+                    field=FieldName.TARGET,
+                    expected_ndim=2,
+                ),
                 # maps the target to (1, T)
                 # if the target data is uni dimensional
-                ExpandDimArray(field=FieldName.TARGET, axis=None,),
+                ExpandDimArray(
+                    field=FieldName.TARGET,
+                    axis=None,
+                ),
                 AddObservedValuesIndicator(
                     target_field=FieldName.TARGET,
                     output_field=FieldName.OBSERVED_VALUES,
@@ -125,27 +152,37 @@ class TempFlowEstimator(PTSEstimator):
                     target_field=FieldName.TARGET,
                 ),
                 AsNumpyArray(field=FieldName.FEAT_STATIC_CAT, expected_ndim=1),
-                InstanceSplitter(
-                    target_field=FieldName.TARGET,
-                    is_pad_field=FieldName.IS_PAD,
-                    start_field=FieldName.START,
-                    forecast_start_field=FieldName.FORECAST_START,
-                    train_sampler=ExpectedNumInstanceSampler(num_instances=1),
-                    past_length=self.history_length,
-                    future_length=self.prediction_length,
-                    time_series_fields=[
-                        FieldName.FEAT_TIME,
-                        FieldName.OBSERVED_VALUES,
-                    ],
-                    pick_incomplete=self.pick_incomplete,
-                ),
-                RenameFields(
-                    {
-                        f"past_{FieldName.TARGET}": f"past_{FieldName.TARGET}_cdf",
-                        f"future_{FieldName.TARGET}": f"future_{FieldName.TARGET}_cdf",
-                    }
-                ),
             ]
+        )
+
+    def create_instance_splitter(self, mode: str):
+        assert mode in ["training", "validation", "test"]
+
+        instance_sampler = {
+            "training": self.train_sampler,
+            "validation": self.validation_sampler,
+            "test": TestSplitSampler(),
+        }[mode]
+
+        return InstanceSplitter(
+            target_field=FieldName.TARGET,
+            is_pad_field=FieldName.IS_PAD,
+            start_field=FieldName.START,
+            forecast_start_field=FieldName.FORECAST_START,
+            instance_sampler=instance_sampler,
+            past_length=self.history_length,
+            future_length=self.prediction_length,
+            time_series_fields=[
+                FieldName.FEAT_TIME,
+                FieldName.OBSERVED_VALUES,
+            ],
+        ) + (
+            RenameFields(
+                {
+                    f"past_{FieldName.TARGET}": f"past_{FieldName.TARGET}_cdf",
+                    f"future_{FieldName.TARGET}": f"future_{FieldName.TARGET}_cdf",
+                }
+            )
         )
 
     def create_training_network(self, device: torch.device) -> TempFlowTrainingNetwork:
@@ -176,7 +213,7 @@ class TempFlowEstimator(PTSEstimator):
         transformation: Transformation,
         trained_network: TempFlowTrainingNetwork,
         device: torch.device,
-    ) -> PTSPredictor:
+    ) -> Predictor:
         prediction_network = TempFlowPredictionNetwork(
             input_size=self.input_size,
             target_dim=self.target_dim,
@@ -201,13 +238,15 @@ class TempFlowEstimator(PTSEstimator):
         ).to(device)
 
         copy_parameters(trained_network, prediction_network)
+        input_names = get_module_forward_input_names(prediction_network)
+        prediction_splitter = self.create_instance_splitter("test")
 
-        return PTSPredictor(
-            input_transform=transformation,
+        return PyTorchPredictor(
+            input_transform=transformation + prediction_splitter,
+            input_names=input_names,
             prediction_net=prediction_network,
             batch_size=self.trainer.batch_size,
             freq=self.freq,
             prediction_length=self.prediction_length,
             device=device,
-            output_transform=None,
         )

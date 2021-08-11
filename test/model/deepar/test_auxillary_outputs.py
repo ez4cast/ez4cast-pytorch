@@ -15,8 +15,11 @@ from itertools import islice
 
 import torch
 
+from gluonts.dataset.artificial import constant_dataset
+from gluonts.dataset.loader import TrainDataLoader
+from gluonts.torch.batchify import batchify
+
 from pts import Trainer
-from pts.dataset import constant_dataset, TrainDataLoader
 from pts.model import get_module_forward_input_names
 from pts.model.deepar import DeepAREstimator
 from pts.modules import StudentTOutput
@@ -34,7 +37,7 @@ def test_distribution():
     estimator = DeepAREstimator(
         freq=freq,
         prediction_length=prediction_length,
-        input_size=48,
+        input_size=15,
         trainer=Trainer(epochs=1, num_batches_per_epoch=1),
         distr_output=StudentTOutput(),
     )
@@ -46,11 +49,12 @@ def test_distribution():
     num_samples = 3
 
     training_data_loader = TrainDataLoader(
-        dataset=train_ds,
-        transform=train_output.transformation,
+        train_ds,
+        transform=train_output.transformation
+        + estimator.create_instance_splitter("training"),
         batch_size=batch_size,
         num_batches_per_epoch=estimator.trainer.num_batches_per_epoch,
-        device=torch.device("cpu"),
+        stack_fn=batchify,
     )
 
     seq_len = 2 * ds_info.prediction_length
@@ -62,4 +66,8 @@ def test_distribution():
             *[data_entry[k] for k in input_names]
         )
 
-        assert distr.sample((num_samples,)).shape == (num_samples, batch_size, seq_len,)
+        assert distr.sample((num_samples,)).shape == (
+            num_samples,
+            batch_size,
+            seq_len,
+        )

@@ -3,16 +3,26 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 
-from pts import Trainer
-from pts.dataset import FieldName
-from pts.model import PTSEstimator, Predictor, PTSPredictor, copy_parameters
-from pts.transform import (
+from gluonts.core.component import validated
+from gluonts.dataset.field_names import FieldName
+from gluonts.model.predictor import Predictor
+from gluonts.torch.model.predictor import PyTorchPredictor
+from gluonts.torch.util import copy_parameters
+from gluonts.transform import (
     InstanceSplitter,
+    ValidationSplitSampler,
+    TestSplitSampler,
+    AddObservedValuesIndicator,
     Transformation,
     Chain,
     RemoveFields,
     ExpectedNumInstanceSampler,
 )
+
+from pts import Trainer
+from pts.model import PyTorchEstimator
+from pts.model.utils import get_module_forward_input_names
+
 from .n_beats_network import (
     NBEATSPredictionNetwork,
     NBEATSTrainingNetwork,
@@ -20,7 +30,8 @@ from .n_beats_network import (
 )
 
 
-class NBEATSEstimator(PTSEstimator):
+class NBEATSEstimator:
+    @validated()
     def __init__(
         self,
         freq: str,
@@ -91,6 +102,11 @@ class NBEATSEstimator(PTSEstimator):
             invalidation_message=f"Values of 'stack_types' should be one of {VALID_N_BEATS_STACK_TYPES}",
         )
 
+        self.train_sampler = ExpectedNumInstanceSampler(
+            num_instances=1.0, min_future=prediction_length
+        )
+        self.validation_sampler = ValidationSplitSampler(min_future=prediction_length)
+
     def _validate_nbeats_argument(
         self,
         argument_value,
@@ -124,24 +140,43 @@ class NBEATSEstimator(PTSEstimator):
     # conditioning part and a to-predict part, for each training example.
     def create_transformation(self) -> Transformation:
         return Chain(
-            [   RemoveFields(
-                    field_names=[FieldName.FEAT_STATIC_REAL, 
-                        FieldName.FEAT_DYNAMIC_REAL, 
-                        FieldName.FEAT_DYNAMIC_CAT]),
-                InstanceSplitter(
+            [
+                RemoveFields(
+                    field_names=[
+                        FieldName.FEAT_STATIC_REAL,
+                        FieldName.FEAT_DYNAMIC_REAL,
+                        FieldName.FEAT_DYNAMIC_CAT,
+                    ]
+                ),
+                AddObservedValuesIndicator(
                     target_field=FieldName.TARGET,
-                    is_pad_field=FieldName.IS_PAD,
-                    start_field=FieldName.START,
-                    forecast_start_field=FieldName.FORECAST_START,
-                    train_sampler=ExpectedNumInstanceSampler(num_instances=1),
-                    past_length=self.context_length,
-                    future_length=self.prediction_length,
-                    time_series_fields=[],
-                )
+                    output_field=FieldName.OBSERVED_VALUES,
+                    dtype=self.dtype,
+                ),
             ]
         )
-    
-    def create_training_network(self, device: torch.device) ->  NBEATSTrainingNetwork:
+
+    def create_instance_splitter(self, mode: str):
+        assert mode in ["training", "validation", "test"]
+
+        instance_sampler = {
+            "training": self.train_sampler,
+            "validation": self.validation_sampler,
+            "test": TestSplitSampler(),
+        }[mode]
+
+        return InstanceSplitter(
+            target_field=FieldName.TARGET,
+            is_pad_field=FieldName.IS_PAD,
+            start_field=FieldName.START,
+            forecast_start_field=FieldName.FORECAST_START,
+            instance_sampler=instance_sampler,
+            past_length=self.context_length,
+            future_length=self.prediction_length,
+            time_series_fields=[FieldName.OBSERVED_VALUES],
+        )
+
+    def create_training_network(self, device: torch.device) -> NBEATSTrainingNetwork:
         return NBEATSTrainingNetwork(
             prediction_length=self.prediction_length,
             context_length=self.context_length,
@@ -156,10 +191,9 @@ class NBEATSEstimator(PTSEstimator):
             freq=self.freq,
         ).to(device)
 
-    
     def create_predictor(
-        self, 
-        transformation: Transformation, 
+        self,
+        transformation: Transformation,
         trained_network: nn.Module,
         device: torch.device,
     ) -> Predictor:
@@ -172,13 +206,16 @@ class NBEATSEstimator(PTSEstimator):
             num_block_layers=self.num_block_layers,
             expansion_coefficient_lengths=self.expansion_coefficient_lengths,
             sharing=self.sharing,
-            stack_types=self.stack_types
+            stack_types=self.stack_types,
         ).to(device)
 
         copy_parameters(trained_network, prediction_network)
+        input_names = get_module_forward_input_names(prediction_network)
+        prediction_splitter = self.create_instance_splitter("test")
 
-        return PTSPredictor(
-            input_transform=transformation,
+        return PyTorchPredictor(
+            input_transform=transformation + prediction_splitter,
+            input_names=input_names,
             prediction_net=prediction_network,
             batch_size=self.trainer.batch_size,
             freq=self.freq,

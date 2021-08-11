@@ -4,19 +4,20 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from pts import Trainer
-from pts.dataset import FieldName
-from pts.feature import (
-    TimeFeature,
-    fourier_time_features_from_frequency_str,
-    get_fourier_lags_for_frequency,
-)
-from pts.model import PTSEstimator, Predictor, PTSPredictor, copy_parameters
-from pts.modules import DistributionOutput, StudentTOutput
-from pts.transform import (
+from gluonts.core.component import validated
+from gluonts.dataset.field_names import FieldName
+from gluonts.time_feature import TimeFeature
+from gluonts.torch.modules.distribution_output import DistributionOutput
+from gluonts.torch.util import copy_parameters
+from gluonts.torch.model.predictor import PyTorchPredictor
+from gluonts.model.predictor import Predictor
+from gluonts.transform import (
     Transformation,
     Chain,
     InstanceSplitter,
+    InstanceSampler,
+    ValidationSplitSampler,
+    TestSplitSampler,
     ExpectedNumInstanceSampler,
     RemoveFields,
     AddAgeFeature,
@@ -26,13 +27,24 @@ from pts.transform import (
     VstackFeatures,
     SetField,
 )
+
+from pts import Trainer
+from pts.model.utils import get_module_forward_input_names
+from pts.feature import (
+    fourier_time_features_from_frequency,
+    lags_for_fourier_time_features_from_frequency,
+)
+from pts.model import PyTorchEstimator
+from pts.modules import StudentTOutput
+
 from .transformer_network import (
     TransformerTrainingNetwork,
     TransformerPredictionNetwork,
 )
 
 
-class TransformerEstimator(PTSEstimator):
+class TransformerEstimator(PyTorchEstimator):
+    @validated()
     def __init__(
         self,
         input_size: int,
@@ -75,12 +87,14 @@ class TransformerEstimator(PTSEstimator):
         self.embedding_dimension = embedding_dimension
         self.num_parallel_samples = num_parallel_samples
         self.lags_seq = (
-            lags_seq if lags_seq is not None else get_fourier_lags_for_frequency(freq_str=freq)
+            lags_seq
+            if lags_seq is not None
+            else lags_for_fourier_time_features_from_frequency(freq_str=freq)
         )
         self.time_features = (
             time_features
             if time_features is not None
-            else fourier_time_features_from_frequency_str(self.freq)
+            else fourier_time_features_from_frequency(self.freq)
         )
         self.history_length = self.context_length + max(self.lags_seq)
         self.scaling = scaling
@@ -91,6 +105,11 @@ class TransformerEstimator(PTSEstimator):
         self.dim_feedforward_scale = dim_feedforward_scale
         self.num_encoder_layers = num_encoder_layers
         self.num_decoder_layers = num_decoder_layers
+
+        self.train_sampler = ExpectedNumInstanceSampler(
+            num_instances=1.0, min_future=prediction_length
+        )
+        self.validation_sampler = ValidationSplitSampler(min_future=prediction_length)
 
     def create_transformation(self) -> Transformation:
         remove_field_names = [
@@ -117,7 +136,9 @@ class TransformerEstimator(PTSEstimator):
                     field=FieldName.FEAT_STATIC_CAT, expected_ndim=1, dtype=np.long
                 ),
                 AsNumpyArray(
-                    field=FieldName.FEAT_STATIC_REAL, expected_ndim=1, dtype=self.dtype,
+                    field=FieldName.FEAT_STATIC_REAL,
+                    expected_ndim=1,
+                    dtype=self.dtype,
                 ),
                 AsNumpyArray(
                     field=FieldName.TARGET,
@@ -150,20 +171,30 @@ class TransformerEstimator(PTSEstimator):
                         else []
                     ),
                 ),
-                InstanceSplitter(
-                    target_field=FieldName.TARGET,
-                    is_pad_field=FieldName.IS_PAD,
-                    start_field=FieldName.START,
-                    forecast_start_field=FieldName.FORECAST_START,
-                    train_sampler=ExpectedNumInstanceSampler(num_instances=1),
-                    past_length=self.history_length,
-                    future_length=self.prediction_length,
-                    time_series_fields=[
-                        FieldName.FEAT_TIME,
-                        FieldName.OBSERVED_VALUES,
-                    ],
-                ),
             ]
+        )
+
+    def create_instance_splitter(self, mode: str):
+        assert mode in ["training", "validation", "test"]
+
+        instance_sampler = {
+            "training": self.train_sampler,
+            "validation": self.validation_sampler,
+            "test": TestSplitSampler(),
+        }[mode]
+
+        return InstanceSplitter(
+            target_field=FieldName.TARGET,
+            is_pad_field=FieldName.IS_PAD,
+            start_field=FieldName.START,
+            forecast_start_field=FieldName.FORECAST_START,
+            instance_sampler=instance_sampler,
+            past_length=self.history_length,
+            future_length=self.prediction_length,
+            time_series_fields=[
+                FieldName.FEAT_TIME,
+                FieldName.OBSERVED_VALUES,
+            ],
         )
 
     def create_training_network(
@@ -194,7 +225,7 @@ class TransformerEstimator(PTSEstimator):
     def create_predictor(
         self,
         transformation: Transformation,
-        trained_network: nn.Module,
+        trained_network: TransformerTrainingNetwork,
         device: torch.device,
     ) -> Predictor:
 
@@ -219,13 +250,15 @@ class TransformerEstimator(PTSEstimator):
         ).to(device)
 
         copy_parameters(trained_network, prediction_network)
+        input_names = get_module_forward_input_names(prediction_network)
+        prediction_splitter = self.create_instance_splitter("test")
 
-        return PTSPredictor(
-            input_transform=transformation,
+        return PyTorchPredictor(
+            input_transform=transformation + prediction_splitter,
+            input_names=input_names,
             prediction_net=prediction_network,
             batch_size=self.trainer.batch_size,
             freq=self.freq,
             prediction_length=self.prediction_length,
             device=device,
-            output_transform=None,
         )
