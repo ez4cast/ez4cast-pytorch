@@ -96,7 +96,7 @@ class PyTorchEstimator(Estimator):
         **kwargs,
     ) -> TrainOutput:
         transformation = self.create_transformation()
-        if input_net is None
+        if input_net is None:
           print('Create new model')
           trained_net = self.create_training_network(self.trainer.device)
         else:
