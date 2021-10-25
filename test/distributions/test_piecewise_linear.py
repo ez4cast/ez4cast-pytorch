@@ -17,8 +17,8 @@ import pytest
 import torch
 import numpy as np
 
-from pts.distributions import PiecewiseLinear
-from pts.modules import PiecewiseLinearOutput
+from ez4cast.distributions import PiecewiseLinear
+from ez4cast.modules import PiecewiseLinearOutput
 
 
 def empirical_cdf(

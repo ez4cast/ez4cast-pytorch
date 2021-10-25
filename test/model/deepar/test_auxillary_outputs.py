@@ -19,10 +19,10 @@ from gluonts.dataset.artificial import constant_dataset
 from gluonts.dataset.loader import TrainDataLoader
 from gluonts.torch.batchify import batchify
 
-from pts import Trainer
-from pts.model import get_module_forward_input_names
-from pts.model.deepar import DeepAREstimator
-from pts.modules import StudentTOutput
+from ez4cast import Trainer
+from ez4cast.model import get_module_forward_input_names
+from ez4cast.model.deepar import DeepAREstimator
+from ez4cast.modules import StudentTOutput
 
 ds_info, train_ds, test_ds = constant_dataset()
 freq = ds_info.metadata.freq

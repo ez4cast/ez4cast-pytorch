@@ -9,7 +9,7 @@ from torch.distributions import (
     Normal,
     Poisson,
 )
-from pts.distributions import (
+from ez4cast.distributions import (
     ZeroInflatedDistribution,
     ZeroInflatedNegativeBinomial,
     ZeroInflatedPoisson,

@@ -23,8 +23,8 @@ from gluonts.dataset.multivariate_grouper import MultivariateGrouper
 from gluonts.evaluation import MultivariateEvaluator
 from gluonts.evaluation.backtest import make_evaluation_predictions
 
-from pts.model.lstnet import LSTNetEstimator
-from pts import Trainer
+from ez4cast.model.lstnet import LSTNetEstimator
+from ez4cast import Trainer
 
 
 NUM_SERIES = 10

@@ -43,7 +43,7 @@ from gluonts.time_feature.holiday import (
     squared_exponential_kernel,
     exponential_kernel,
 )
-from pts.feature.holiday import CustomDateFeatureSet, CustomHolidayFeatureSet
+from ez4cast.feature.holiday import CustomDateFeatureSet, CustomHolidayFeatureSet
 
 test_dates = {
     NEW_YEARS_DAY: [

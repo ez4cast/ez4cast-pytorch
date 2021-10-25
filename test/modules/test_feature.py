@@ -18,7 +18,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from pts.modules import FeatureEmbedder, FeatureAssembler
+from ez4cast.modules import FeatureEmbedder, FeatureAssembler
 
 
 @pytest.mark.parametrize(

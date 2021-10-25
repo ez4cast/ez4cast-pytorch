@@ -12,9 +12,9 @@ from gluonts.dataset.repository.datasets import get_dataset
 from gluonts.evaluation import Evaluator
 from gluonts.evaluation.backtest import make_evaluation_predictions
 from gluonts.torch.modules.distribution_output import DistributionOutput
-from pts import Trainer
-from pts.model.deepar import DeepAREstimator
-from pts.modules import ImplicitQuantileOutput
+from ez4cast import Trainer
+from ez4cast.model.deepar import DeepAREstimator
+from ez4cast.modules import ImplicitQuantileOutput
 
 NUM_SAMPLES = 2000
 BATCH_SIZE = 32

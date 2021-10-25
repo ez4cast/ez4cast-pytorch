@@ -19,13 +19,13 @@ from gluonts.dataset.artificial import constant_dataset
 from gluonts.dataset.multivariate_grouper import MultivariateGrouper
 from gluonts.evaluation import MultivariateEvaluator
 from gluonts.evaluation.backtest import backtest_metrics
-from pts.model.deepvar import DeepVAREstimator
-from pts.modules import (
+from ez4cast.model.deepvar import DeepVAREstimator
+from ez4cast.modules import (
     NormalOutput,
     LowRankMultivariateNormalOutput,
     MultivariateNormalOutput,
 )
-from pts import Trainer
+from ez4cast import Trainer
 
 
 def load_multivariate_constant_dataset():

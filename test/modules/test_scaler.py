@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import torch
 
-from pts.modules import MeanScaler, NOPScaler
+from ez4cast.modules import MeanScaler, NOPScaler
 
 test_cases = [
     (

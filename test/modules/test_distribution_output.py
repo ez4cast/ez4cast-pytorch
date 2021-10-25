@@ -18,7 +18,7 @@ from torch.optim import SGD
 from torch.utils.data import TensorDataset, DataLoader
 
 from gluonts.torch.modules.distribution_output import DistributionOutput
-from pts.modules import (
+from ez4cast.modules import (
     StudentTOutput,
     BetaOutput,
     NegativeBinomialOutput,
