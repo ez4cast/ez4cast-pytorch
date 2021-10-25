@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="pytorchts",
+    name="ez4cast",
     version="0.5.1",
     description="PyTorch Probabilistic Time Series Modeling framework",
     long_description=open("README.md").read(),
